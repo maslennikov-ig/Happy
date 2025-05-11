@@ -1,0 +1,67 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    image: happy-frontend:latest
+    container_name: happy-frontend
+    ports:
+      - "5000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - backend
+    networks:
+      - happy-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    image: happy-backend:latest
+    container_name: happy-backend
+    ports:
+      - "5001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - /app/dist
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/happy_db?schema=public
+      - PORT=3001
+      - NODE_ENV=development
+      - JWT_SECRET=your-secret-key-here
+      - JWT_REFRESH_SECRET=your-refresh-secret-key-here
+      - JWT_EXPIRATION_TIME=1h
+      - JWT_REFRESH_EXPIRATION_TIME=7d
+    depends_on:
+      - postgres
+    networks:
+      - happy-network
+
+  postgres:
+    image: postgres:14
+    container_name: happy-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=happy_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - happy-network
+
+volumes:
+  postgres-data:
+
+networks:
+  happy-network:
+    driver: bridge 
