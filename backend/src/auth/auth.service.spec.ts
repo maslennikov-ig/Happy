@@ -2,8 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
-import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+
+jest.mock('bcrypt');
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -44,6 +46,70 @@ describe('AuthService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('validateUser', () => {
+    it('should return user without password if credentials are valid', async () => {
+      const mockUser = {
+        id: '1',
+        email: 'test@example.com',
+        password: 'hashedPassword',
+        firstName: 'John',
+        lastName: 'Doe',
+        role: 'CLIENT',
+      };
+
+      mockUsersService.findOneByEmail.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      const result = await service.validateUser('test@example.com', 'password123');
+
+      expect(mockUsersService.findOneByEmail).toHaveBeenCalledWith('test@example.com');
+      expect(bcrypt.compare).toHaveBeenCalledWith('password123', 'hashedPassword');
+      expect(result).not.toHaveProperty('password');
+      expect(result).toEqual({
+        id: '1',
+        email: 'test@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+        role: 'CLIENT',
+      });
+    });
+
+    it('should return null if user not found', async () => {
+      mockUsersService.findOneByEmail.mockResolvedValue(null);
+
+      const result = await service.validateUser('nonexistent@example.com', 'password123');
+
+      expect(mockUsersService.findOneByEmail).toHaveBeenCalledWith('nonexistent@example.com');
+      expect(result).toBeNull();
+    });
+
+    it('should return null if password is invalid', async () => {
+      const mockUser = {
+        id: '1',
+        email: 'test@example.com',
+        password: 'hashedPassword',
+      };
+
+      mockUsersService.findOneByEmail.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+      const result = await service.validateUser('test@example.com', 'wrongpassword');
+
+      expect(mockUsersService.findOneByEmail).toHaveBeenCalledWith('test@example.com');
+      expect(bcrypt.compare).toHaveBeenCalledWith('wrongpassword', 'hashedPassword');
+      expect(result).toBeNull();
+    });
+
+    it('should return null if an error occurs', async () => {
+      mockUsersService.findOneByEmail.mockRejectedValue(new Error('Database error'));
+
+      const result = await service.validateUser('test@example.com', 'password123');
+
+      expect(mockUsersService.findOneByEmail).toHaveBeenCalledWith('test@example.com');
+      expect(result).toBeNull();
+    });
   });
 
   describe('register', () => {
@@ -114,14 +180,92 @@ describe('AuthService', () => {
         companyId: '1',
       };
 
+      mockJwtService.sign.mockReturnValueOnce('access-token').mockReturnValueOnce('refresh-token');
+
+      const result = await service.login(user);
+
+      expect(mockJwtService.sign).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        user: {
+          id: '1',
+          email: 'test@example.com',
+          firstName: 'John',
+          lastName: 'Doe',
+          role: 'CLIENT',
+          company: undefined,
+        },
+      });
+    });
+
+    it('should include company data in response if available', async () => {
+      const user = {
+        id: '1',
+        email: 'test@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+        role: 'CLIENT',
+        company: {
+          id: '1',
+          name: 'Test Company',
+        },
+      };
+
       mockJwtService.sign.mockReturnValue('jwt-token');
 
       const result = await service.login(user);
 
-      expect(mockJwtService.sign).toHaveBeenCalled();
-      expect(result).toHaveProperty('access_token');
-      expect(result).toHaveProperty('refresh_token');
-      expect(result).toHaveProperty('user');
+      expect(result.user).toHaveProperty('company', user.company);
+    });
+  });
+
+  describe('refreshToken', () => {
+    it('should return new tokens if refresh token is valid', async () => {
+      const payload = {
+        email: 'test@example.com',
+        sub: '1',
+        role: 'CLIENT',
+      };
+
+      const user = {
+        id: '1',
+        email: 'test@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+        role: 'CLIENT',
+      };
+
+      mockJwtService.verify.mockReturnValue(payload);
+      mockUsersService.findOneById.mockResolvedValue(user);
+      mockJwtService.sign.mockReturnValueOnce('new-access-token').mockReturnValueOnce('new-refresh-token');
+
+      const result = await service.refreshToken('valid-refresh-token');
+
+      expect(mockJwtService.verify).toHaveBeenCalled();
+      expect(mockUsersService.findOneById).toHaveBeenCalledWith('1');
+      expect(result).toEqual({
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+        user: {
+          id: '1',
+          email: 'test@example.com',
+          firstName: 'John',
+          lastName: 'Doe',
+          role: 'CLIENT',
+          company: undefined,
+        },
+      });
+    });
+
+    it('should throw UnauthorizedException if refresh token is invalid', async () => {
+      mockJwtService.verify.mockImplementation(() => {
+        throw new Error('Invalid token');
+      });
+
+      await expect(service.refreshToken('invalid-token')).rejects.toThrow(UnauthorizedException);
+      expect(mockJwtService.verify).toHaveBeenCalled();
+      expect(mockUsersService.findOneById).not.toHaveBeenCalled();
     });
   });
 

@@ -386,4 +386,211 @@ describe('CompaniesService', () => {
       ).rejects.toThrow(ConflictException);
     });
   });
+
+  describe('acceptInvitation', () => {
+    const acceptInvitationDto = {
+      token: 'valid-token',
+      firstName: 'John',
+      lastName: 'Doe',
+      password: 'newPassword123',
+    };
+
+    it('should accept invitation and update user data', async () => {
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 1); // Завтрашняя дата
+
+      const mockUser = {
+        id: '1',
+        email: 'employee@example.com',
+        invitationToken: 'valid-token',
+        invitationExpires: futureDate,
+        role: 'EMPLOYEE',
+        companyId: '1',
+      };
+
+      const mockCompany = {
+        id: '1',
+        name: 'Test Company',
+      };
+
+      const updatedUser = {
+        ...mockUser,
+        firstName: 'John',
+        lastName: 'Doe',
+        password: 'hashed_password',
+        invitationToken: null,
+        invitationExpires: null,
+        isActive: true,
+        company: mockCompany,
+      };
+
+      mockPrismaService.user.findFirst.mockResolvedValue(mockUser);
+      mockPrismaService.user.update.mockResolvedValue(updatedUser);
+
+      const result = await service.acceptInvitation(acceptInvitationDto);
+
+      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          invitationToken: 'valid-token',
+        },
+      });
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: mockUser.id },
+        data: {
+          firstName: 'John',
+          lastName: 'Doe',
+          password: 'hashed_password',
+          invitationToken: null,
+          invitationExpires: null,
+          isActive: true,
+        },
+        include: {
+          company: true,
+        },
+      });
+
+      expect(result).toEqual({
+        success: true,
+        message: 'Приглашение успешно принято',
+        user: {
+          id: updatedUser.id,
+          email: updatedUser.email,
+          firstName: updatedUser.firstName,
+          lastName: updatedUser.lastName,
+          role: updatedUser.role,
+          company: {
+            id: mockCompany.id,
+            name: mockCompany.name,
+          },
+        },
+      });
+    });
+
+    it('should throw NotFoundException if invitation not found', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.acceptInvitation(acceptInvitationDto),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw BadRequestException if invitation is expired', async () => {
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 1); // Вчерашняя дата
+
+      const mockUser = {
+        id: '1',
+        email: 'employee@example.com',
+        invitationToken: 'valid-token',
+        invitationExpires: pastDate,
+      };
+
+      mockPrismaService.user.findFirst.mockResolvedValue(mockUser);
+
+      await expect(
+        service.acceptInvitation(acceptInvitationDto),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('checkInvitation', () => {
+    it('should return invitation info if valid', async () => {
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 1); // Завтрашняя дата
+
+      const mockUser = {
+        id: '1',
+        email: 'employee@example.com',
+        invitationToken: 'valid-token',
+        invitationExpires: futureDate,
+        company: {
+          id: '1',
+          name: 'Test Company',
+        },
+      };
+
+      mockPrismaService.user.findFirst.mockResolvedValue(mockUser);
+
+      const result = await service.checkInvitation({ token: 'valid-token' });
+
+      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          invitationToken: 'valid-token',
+        },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        valid: true,
+        email: mockUser.email,
+        company: mockUser.company,
+      });
+    });
+
+    it('should throw NotFoundException if invitation not found', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.checkInvitation({ token: 'invalid-token' })
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          invitationToken: 'invalid-token',
+        },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+    });
+
+    it('should throw BadRequestException if invitation is expired', async () => {
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 1); // Вчерашняя дата
+
+      const mockUser = {
+        id: '1',
+        email: 'employee@example.com',
+        invitationToken: 'expired-token',
+        invitationExpires: pastDate,
+        company: {
+          id: '1',
+          name: 'Test Company',
+        },
+      };
+
+      mockPrismaService.user.findFirst.mockResolvedValue(mockUser);
+
+      await expect(
+        service.checkInvitation({ token: 'expired-token' })
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          invitationToken: 'expired-token',
+        },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+    });
+  });
 });
