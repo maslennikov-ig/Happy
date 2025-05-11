@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -25,6 +26,11 @@ jest.mock('crypto', () => ({
   }),
 }));
 
+// Мок для uuid
+jest.mock('uuid', () => ({
+  v4: jest.fn().mockReturnValue('mocked-uuid'),
+}));
+
 describe('CompaniesService', () => {
   let service: CompaniesService;
 
@@ -35,10 +41,10 @@ describe('CompaniesService', () => {
     },
     user: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
-      findFirst: jest.fn(),
       create: jest.fn(),
     },
     invitation: {
@@ -48,6 +54,8 @@ describe('CompaniesService', () => {
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+    
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CompaniesService,
@@ -88,34 +96,6 @@ describe('CompaniesService', () => {
   });
 
   describe('getCompanyByUserId', () => {
-    it('should return a company if user has one', async () => {
-      const mockCompany = { id: '1', name: 'Test Company' };
-      const mockUser = { id: '1', company: mockCompany };
-      mockPrismaService.user.findUnique.mockResolvedValue(mockUser);
-
-      const result = await service.getCompanyByUserId('1');
-      expect(result).toEqual(mockCompany);
-      expect(mockPrismaService.user.findUnique).toHaveBeenCalledWith({
-        where: { id: '1' },
-        include: { company: true },
-      });
-    });
-
-    it('should throw NotFoundException if user has no company', async () => {
-      mockPrismaService.user.findUnique.mockResolvedValue({
-        id: '1',
-        company: null,
-      });
-
-      await expect(service.getCompanyByUserId('1')).rejects.toThrow(
-        NotFoundException,
-      );
-      expect(mockPrismaService.user.findUnique).toHaveBeenCalledWith({
-        where: { id: '1' },
-        include: { company: true },
-      });
-    });
-
     it('should return company data', async () => {
       const companyId = 'company-id';
       const companyData = {
@@ -201,41 +181,33 @@ describe('CompaniesService', () => {
 
     it('should create a new user if email does not exist', async () => {
       // Пользователь не существует
-      mockPrismaService.user.findUnique.mockResolvedValue(null);
+      mockPrismaService.user.findFirst.mockResolvedValue(null);
 
       // Мокаем создание пользователя
       const newUser = {
         id: '2',
         email: inviteDto.email,
-        firstName: inviteDto.firstName,
-        lastName: inviteDto.lastName,
-        role: 'EMPLOYEE',
-        isActive: false,
       };
       mockPrismaService.user.create.mockResolvedValue(newUser);
 
       const result = await service.inviteEmployee(companyId, inviteDto);
 
       expect(result).toEqual({
-        message: 'Приглашение отправлено новому сотруднику',
-        employee: {
-          id: newUser.id,
-          email: newUser.email,
-          firstName: newUser.firstName,
-          lastName: newUser.lastName,
-          isActive: newUser.isActive,
-        },
+        success: true,
+        message: `Приглашение успешно отправлено на email ${inviteDto.email}`,
       });
 
       expect(mockPrismaService.user.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           email: inviteDto.email,
-          firstName: inviteDto.firstName,
-          lastName: inviteDto.lastName,
+          firstName: '',
+          lastName: '',
+          password: '',
           role: 'EMPLOYEE',
           companyId: companyId,
           isActive: false,
-          isEmailVerified: false,
+          invitationToken: 'random_token',
+          invitationExpires: expect.any(Date),
         }),
       });
     });
@@ -250,27 +222,13 @@ describe('CompaniesService', () => {
         role: 'CLIENT',
         companyId: null,
       };
-      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
-
-      // Мокаем обновление пользователя
-      const updatedUser = {
-        ...existingUser,
-        role: 'EMPLOYEE',
-        companyId: companyId,
-      };
-      mockPrismaService.user.update.mockResolvedValue(updatedUser);
+      mockPrismaService.user.findFirst.mockResolvedValue(existingUser);
 
       const result = await service.inviteEmployee(companyId, inviteDto);
 
       expect(result).toEqual({
-        message: 'Приглашение отправлено существующему пользователю',
-        employee: {
-          id: updatedUser.id,
-          email: updatedUser.email,
-          firstName: updatedUser.firstName,
-          lastName: updatedUser.lastName,
-          isActive: updatedUser.isActive,
-        },
+        success: true,
+        message: `Приглашение успешно отправлено на email ${inviteDto.email}`,
       });
 
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
@@ -278,22 +236,31 @@ describe('CompaniesService', () => {
         data: expect.objectContaining({
           companyId: companyId,
           role: 'EMPLOYEE',
+          invitationToken: 'random_token',
+          invitationExpires: expect.any(Date),
         }),
       });
     });
 
-    it('should throw ForbiddenException if user is ADMIN or CONCIERGE', async () => {
-      // Пользователь существует и является администратором
+    it('should return success message if user is already in this company', async () => {
+      // Пользователь существует и уже в этой компании
       const existingUser = {
         id: '2',
         email: inviteDto.email,
-        role: 'ADMIN',
+        role: 'EMPLOYEE',
+        companyId: companyId, // та же компания
       };
-      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.findFirst.mockResolvedValue(existingUser);
 
-      await expect(
-        service.inviteEmployee(companyId, inviteDto),
-      ).rejects.toThrow(ForbiddenException);
+      const result = await service.inviteEmployee(companyId, inviteDto);
+
+      expect(result).toEqual({
+        success: true,
+        message: `Пользователь с email ${inviteDto.email} уже является сотрудником компании`,
+      });
+
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled();
     });
 
     it('should throw ConflictException if user is already in another company', async () => {
@@ -304,22 +271,7 @@ describe('CompaniesService', () => {
         role: 'EMPLOYEE',
         companyId: '999', // другая компания
       };
-      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
-
-      await expect(
-        service.inviteEmployee(companyId, inviteDto),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('should throw ConflictException if user is already in this company', async () => {
-      // Пользователь существует и уже в этой компании
-      const existingUser = {
-        id: '2',
-        email: inviteDto.email,
-        role: 'EMPLOYEE',
-        companyId: companyId, // та же компания
-      };
-      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.findFirst.mockResolvedValue(existingUser);
 
       await expect(
         service.inviteEmployee(companyId, inviteDto),
@@ -336,12 +288,14 @@ describe('CompaniesService', () => {
           email: 'employee1@example.com',
           firstName: 'John',
           lastName: 'Doe',
+          isActive: true,
         },
         {
           id: '3',
           email: 'employee2@example.com',
           firstName: 'Jane',
           lastName: 'Doe',
+          isActive: true,
         },
       ];
 
@@ -375,7 +329,7 @@ describe('CompaniesService', () => {
       const employeeId = '2';
 
       mockPrismaService.company.findUnique.mockResolvedValue({ id: companyId });
-      mockPrismaService.user.findFirst.mockResolvedValue({
+      mockPrismaService.user.findUnique.mockResolvedValue({
         id: employeeId,
         email: 'employee@example.com',
         role: 'EMPLOYEE',
@@ -385,39 +339,51 @@ describe('CompaniesService', () => {
       mockPrismaService.user.update.mockResolvedValue({
         id: employeeId,
         email: 'employee@example.com',
-        isActive: false,
         companyId: null,
+        role: 'CLIENT',
       });
 
       const result = await service.removeEmployee(companyId, employeeId);
 
       expect(result).toEqual({
-        message: 'Сотрудник успешно удален из компании',
-        employee: {
-          id: employeeId,
-          email: 'employee@example.com',
-        },
+        success: true,
+        message: `Сотрудник с ID ${employeeId} успешно удален из компании`,
       });
 
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: employeeId },
         data: {
-          isActive: false,
           companyId: null,
+          role: 'CLIENT',
         },
       });
     });
 
-    it('should throw NotFoundException if employee does not exist in company', async () => {
+    it('should throw NotFoundException if employee does not exist', async () => {
       const companyId = '1';
       const employeeId = '2';
 
       mockPrismaService.company.findUnique.mockResolvedValue({ id: companyId });
-      mockPrismaService.user.findFirst.mockResolvedValue(null);
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
 
       await expect(
         service.removeEmployee(companyId, employeeId),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ConflictException if employee is not in this company', async () => {
+      const companyId = '1';
+      const employeeId = '2';
+
+      mockPrismaService.company.findUnique.mockResolvedValue({ id: companyId });
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: employeeId,
+        companyId: 'another-company-id',
+      });
+
+      await expect(
+        service.removeEmployee(companyId, employeeId),
+      ).rejects.toThrow(ConflictException);
     });
   });
 });

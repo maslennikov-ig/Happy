@@ -117,7 +117,7 @@ describe('CompaniesController', () => {
 
       expect(mockCompaniesService.inviteEmployee).toHaveBeenCalledWith(
         req.user.companyId,
-        inviteDto.email,
+        inviteDto,
       );
       expect(result).toEqual(inviteResult);
     });

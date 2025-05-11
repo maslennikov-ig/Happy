@@ -4,11 +4,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 
-jest.mock('@prisma/client');
 jest.mock('bcrypt');
 
 describe('UsersService', () => {
   let service: UsersService;
+  let prismaService: PrismaService;
 
   const mockPrismaService = {
     user: {
@@ -16,6 +16,7 @@ describe('UsersService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
+    $transaction: jest.fn((callback) => callback(mockPrismaService)),
   };
 
   beforeEach(async () => {
@@ -32,6 +33,12 @@ describe('UsersService', () => {
     }).compile();
 
     service = module.get<UsersService>(UsersService);
+    prismaService = module.get<PrismaService>(PrismaService);
+    
+    // Переопределяем приватное свойство prisma
+    Object.defineProperty(service, 'prisma', {
+      value: mockPrismaService
+    });
   });
 
   it('should be defined', () => {
@@ -56,6 +63,7 @@ describe('UsersService', () => {
         password: 'hashedPassword',
         resetPasswordToken: null,
         resetPasswordExpires: null,
+        company: null,
       };
 
       const mockUpdatedUser = {
@@ -91,6 +99,7 @@ describe('UsersService', () => {
         firstName: 'Новое Имя',
         lastName: 'Новая Фамилия',
         phone: '+79001234567',
+        company: null,
       });
     });
   });
